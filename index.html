@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time Clock Kiosk</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<!--
+  THE BIG CARROT · TIME CLOCK KIOSK  (one file, two ways to run it)
+
+  A) USB / Bluetooth barcode scanner → open  <manager web app link>?view=kiosk
+     (served by Apps Script; no changes needed).
+
+  B) CAMERA scanning → Google blocks the camera inside Apps Script pages, so host
+     THIS SAME FILE as index.html on GitHub Pages (see the Install Guide) and paste
+     the *Kiosk API* web-app link between the quotes below.
+-->
+<script>
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxiYAI9kWr56jVmmb0Oekcd0yz0hi9PJ28Te2wnubCf6_59uVUnxFeG5pAhsFpHpu9s/exec';   // ← camera kiosk only: paste the Kiosk API /exec link here
+</script>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#24104A;color:#fff;font-family:Inter,Arial,sans-serif;overflow:hidden;user-select:none}
+[hidden]{display:none!important}
+.wrap{height:100vh;display:flex;flex-direction:column}
+.top{display:flex;justify-content:space-between;align-items:center;padding:18px 32px;border-bottom:1px solid #3a2163;gap:16px}
+.brand{display:flex;align-items:center;gap:14px}
+.logo{width:44px;height:44px;border-radius:12px;background:#E8772E;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.status{display:flex;align-items:center;gap:10px;font-size:14px;color:#c9bde0}
+.dotk{width:10px;height:10px;border-radius:50%;background:#4ADE80}.dotk.off{background:#F87171}
+.body{flex:1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:0}
+.left{padding:36px 40px 28px 48px;display:flex;flex-direction:column;justify-content:center;gap:8px;border-right:1px solid #3a2163;min-height:0}
+.date{font-size:18px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#E8772E}
+.clock{font-size:clamp(64px,9vw,132px);font-weight:800;line-height:1;letter-spacing:-.03em}
+.clock span{font-size:.36em;font-weight:600;color:#c9bde0}
+.tips{margin-top:24px;display:flex;flex-direction:column;gap:12px;font-size:16px;color:#ddd3ee}
+.tips div{display:flex;gap:10px;align-items:center}
+.cam-wrap{margin-top:18px;border-radius:18px;overflow:hidden;background:#000;border:3px solid #6b4aa3;position:relative;max-width:520px;width:100%}
+#cam{width:100%}
+#cam video{width:100%!important;display:block}
+.cam-wrap.mirror #cam video{transform:scaleX(-1)}
+.cam-label{position:absolute;left:12px;top:10px;background:rgba(36,16,74,.8);border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600}
+.cam-msg{margin-top:14px;font-size:14px;color:#fecaca;max-width:480px;line-height:1.45}
+.right{padding:36px 48px;display:flex;align-items:center;justify-content:center;min-height:0}
+.idle{width:100%;max-width:480px;display:flex;flex-direction:column;align-items:center;gap:24px;text-align:center}
+.scanbox{position:relative;width:300px;height:170px;border-radius:20px;border:3px dashed #6b4aa3;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.laser{position:absolute;left:6%;right:6%;height:3px;background:#E8772E;box-shadow:0 0 18px #E8772E;animation:sweep 2.4s ease-in-out infinite}
+@keyframes sweep{0%{top:8%}50%{top:88%}100%{top:8%}}
+@keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
+h1{margin:0;font-size:42px;font-weight:800}
+.hint{font-size:17px;color:#c9bde0;margin-top:8px;animation:pulse 2s infinite}
+.typed{display:flex;flex-direction:column;gap:6px;font-size:13px;color:#a796c7;width:100%;text-align:left}
+.typed input{font-family:inherit;font-size:22px;padding:14px 16px;border-radius:12px;border:1px solid #4b2d78;background:#1b0b3a;color:#fff;text-align:center;letter-spacing:.12em;text-transform:uppercase;width:100%}
+.typed input:focus{outline:2px solid #E8772E}
+.res{width:100%;max-width:520px;border-radius:24px;padding:38px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;animation:pop .18s ease-out;position:relative}
+@keyframes pop{from{transform:scale(.96);opacity:.4}to{transform:none;opacity:1}}
+.res .ic{width:92px;height:92px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.res .big{font-size:42px;font-weight:800;line-height:1.08}
+.res .lead{font-size:19px;font-weight:700}
+.pills{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px}
+.pill{background:#fff;border-radius:999px;padding:8px 14px;font-size:15px;font-weight:700}
+.count{margin-top:10px;font-size:15px;opacity:.8}
+.r-in{background:#E9F9EF;color:#0F3D22}.r-in .ic{background:#16A34A}.r-in .pill{border:1px solid #b7e4c7}
+.r-out{background:#EEF2FF;color:#1E1B4B}.r-out .ic{background:#3D1A6B}.r-out .pill{border:1px solid #c7cdf5}
+.r-warn{background:#FFF4E5;color:#4A2A00}.r-warn .ic{background:#C2410C}.r-warn .pill{border:1px solid #fed7aa}
+.r-err{background:#FDECEC;color:#4C0F0F}.r-err .ic{background:#B91C1C}
+.tag-late{background:#C2410C!important;color:#fff;border:0!important}.tag-ok{background:#16A34A!important;color:#fff;border:0!important}
+.proc{font-size:28px;font-weight:700;color:#ddd3ee;display:flex;gap:14px;align-items:center}
+.spin{width:34px;height:34px;border:4px solid #4b2d78;border-top-color:#E8772E;border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 32px;background:#1a0a38;border-top:1px solid #3a2163;font-size:13px;color:#a796c7}
+.foot button,.foot select{background:#24104A;border:1px solid #4b2d78;color:#ddd3ee;border-radius:8px;padding:8px 12px;cursor:pointer;font-family:inherit;font-size:13px;min-height:38px}
+.foot button.on{background:#E8772E;color:#24104A;border-color:#E8772E;font-weight:700}
+.setup{height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.setup .card{background:#fff;color:#1C1530;border-radius:20px;padding:32px;width:100%;max-width:440px;display:flex;flex-direction:column;gap:14px}
+.setup input{font-family:inherit;font-size:20px;padding:12px 14px;border:1px solid #CFC7DD;border-radius:10px;text-transform:uppercase;letter-spacing:.1em;text-align:center}
+.setup button{font-family:inherit;font-size:16px;font-weight:700;height:50px;border:0;border-radius:10px;background:#3D1A6B;color:#fff;cursor:pointer}
+@media (max-width:900px){
+  .body{grid-template-columns:1fr;overflow:auto}
+  .left{border-right:0;border-bottom:1px solid #3a2163;padding:18px 20px}
+  .left .tips{display:none}
+  .clock{font-size:56px}
+  .right{padding:20px}
+}
+</style>
+</head>
+<body>
+
+<div class="setup" id="setup" hidden>
+  <div class="card">
+    <div style="font-size:22px;font-weight:800">Set up this kiosk</div>
+    <div style="font-size:14px;color:#5b5470;line-height:1.5" id="setupHelp">Enter the station key from Time Clock ▸ Settings ▸ Kiosk stations. You only do this once per tablet.</div>
+    <input id="keyInp" placeholder="DAN-XXXXXXXXXX" aria-label="Station key" autocomplete="off">
+    <button id="keyBtn">Connect station</button>
+    <div id="keyMsg" style="color:#B91C1C;font-size:14px;min-height:18px"></div>
+  </div>
+</div>
+
+<div class="wrap" id="kiosk" hidden>
+  <div class="top">
+    <div class="brand">
+      <div class="logo"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#24104A" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+      <div><div style="font-size:19px;font-weight:700" id="org">The Big Carrot · Time Clock</div><div style="font-size:14px;color:#c9bde0" id="stName"></div></div>
+    </div>
+    <div class="status"><span class="dotk" id="dot"></span><span id="online">Online</span></div>
+  </div>
+  <div class="body">
+    <div class="left">
+      <div class="date" id="date"></div>
+      <div class="clock" id="clock"></div>
+      <div class="tips" id="tips">
+        <div><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#E8772E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Scan once to clock in — scan again to clock out</div>
+        <div><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#E8772E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Your shift for today is checked automatically</div>
+        <div><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#E8772E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Forgot your card? Type your Employee ID</div>
+      </div>
+      <div class="cam-wrap" id="camWrap" hidden><div id="cam"></div><div class="cam-label">Hold your ID card up to the camera</div></div>
+      <div class="cam-msg" id="camMsg" hidden></div>
+    </div>
+    <div class="right" id="panel"></div>
+  </div>
+  <div class="foot">
+    <span id="footInfo">Ready</span>
+    <span style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="camBtn" aria-pressed="false">Camera: off</button>
+      <select id="camSel" aria-label="Choose camera" hidden></select>
+      <button id="fsBtn">Full screen</button>
+      <button id="resetBtn">Change station</button>
+    </span>
+  </div>
+</div>
+
+<script>
+const IN_GAS = !!(window.google && google.script && google.script.run);
+let KEY = null, CFG = null, QUEUE = [], BUSY = false, TIMER = null, COUNT = 0, FIRST_KEY_TS = 0;
+let QR = null, CAM_ON = false, LAST_CODE = '', LAST_CODE_TS = 0;
+const $ = id => document.getElementById(id);
+const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }, del: k => { try { localStorage.removeItem(k); } catch (e) {} } };
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ICON = {
+  ok: '<svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+  out: '<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+  x: '<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  bang: '<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" aria-hidden="true"><path d="M12 7v6M12 17h.01"/></svg>'
+};
+const BARCODE = '<svg width="190" height="86" viewBox="0 0 190 90" aria-hidden="true"><g fill="#fff"><rect x="0" width="6" height="90"/><rect x="12" width="3" height="90"/><rect x="20" width="9" height="90"/><rect x="34" width="3" height="90"/><rect x="42" width="6" height="90"/><rect x="54" width="3" height="90"/><rect x="62" width="12" height="90"/><rect x="80" width="3" height="90"/><rect x="88" width="6" height="90"/><rect x="100" width="9" height="90"/><rect x="114" width="3" height="90"/><rect x="122" width="6" height="90"/><rect x="134" width="3" height="90"/><rect x="142" width="12" height="90"/><rect x="160" width="3" height="90"/><rect x="168" width="6" height="90"/><rect x="180" width="10" height="90"/></g></svg>';
+
+// ── Talk to the server: Apps Script (scanner kiosk) or JSON API (camera kiosk) ──
+function api(action, data) {
+  if (IN_GAS) return new Promise((res, rej) => {
+    const r = google.script.run.withSuccessHandler(res).withFailureHandler(rej);
+    action === 'init' ? r.kioskInit(data.key) : r.kioskPunch(data.key, data.id, data.method);
+  });
+  if (!API_URL) return Promise.reject(new Error('API_URL is empty — paste the Kiosk API link at the top of this file.'));
+  return fetch(API_URL, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action }, data)) })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+}
+
+// ── Sound feedback ──
+let AC = null;
+function beep(ok) {
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = 'sine'; o.frequency.value = ok ? 880 : 220;
+    g.gain.setValueAtTime(0.18, AC.currentTime); g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + (ok ? 0.18 : 0.45));
+    o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime + (ok ? 0.2 : 0.5));
+  } catch (e) {}
+}
+
+// ── Clock ──
+function tick() {
+  const d = new Date();
+  $('date').textContent = d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
+  const t = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).split(' ');
+  $('clock').innerHTML = esc(t[0]) + '<span> ' + esc(t[1] || '') + '</span>';
+}
+
+// ── Screens ──
+function idle() {
+  clearInterval(TIMER);
+  $('panel').innerHTML = `<div class="idle">
+    ${CAM_ON ? '' : `<div class="scanbox">${BARCODE}<div class="laser"></div></div>`}
+    <div><h1>${CAM_ON ? 'Show your card' : 'Scan your card'}</h1><div class="hint">${CAM_ON ? 'Hold the barcode up to the camera' : 'Ready · hold the barcode under the scanner'}</div></div>
+    <label class="typed">Or type your Employee ID and press Enter<input id="idInp" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="e.g. SRI250"></label>
+  </div>`;
+  $('idInp').addEventListener('keydown', onKey);
+  focusInput();
+  $('footInfo').textContent = 'Ready';
+}
+function focusInput() { const i = $('idInp'); if (i && document.activeElement !== i && !document.activeElement.matches('select')) i.focus(); }
+function processing() {
+  clearInterval(TIMER);
+  $('panel').innerHTML = '<div class="proc"><div class="spin"></div>Checking…</div>';
+  $('footInfo').textContent = 'Saving punch…';
+}
+function greet() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+function showResult(r) {
+  let cls, icon, lead = '', big, pills = '', sub = '';
+  if (r.ok && r.type === 'IN') {
+    const warn = r.tagKind === 'warn';
+    cls = warn ? 'r-warn' : 'r-in'; icon = ICON.ok;
+    lead = warn ? 'Punched IN — not on today\'s schedule' : 'Successfully punched IN';
+    big = greet() + ', ' + esc(r.first);
+    pills = `<span class="pill">In at ${esc(r.time)}</span>${r.shiftText ? `<span class="pill">Shift ${esc(r.shiftText)}</span>` : ''}${r.tag && !warn ? `<span class="pill ${r.tagKind === 'late' ? 'tag-late' : 'tag-ok'}">${esc(r.tag)}</span>` : ''}`;
+    if (warn) sub = 'Your punch is saved. Your manager will confirm this shift.';
+    beep(true);
+  } else if (r.ok) {
+    cls = 'r-out'; icon = ICON.out; lead = 'Successfully punched OUT';
+    big = 'Have a great ' + (new Date().getHours() >= 17 ? 'evening' : 'day') + ', ' + esc(r.first);
+    pills = `<span class="pill">Out at ${esc(r.time)}</span>${r.todayHours != null ? `<span class="pill">Today ${Number(r.todayHours).toFixed(2)} hrs</span>` : ''}${r.weekHours != null ? `<span class="pill">This week ${Number(r.weekHours).toFixed(2)} hrs</span>` : ''}`;
+    beep(true);
+  } else if (r.code === 'REPEAT') {
+    cls = 'r-warn'; icon = ICON.bang; lead = 'No new punch'; big = r.first ? esc(r.first) + ', you\'re all set' : 'Already punched';
+    sub = esc(r.message); beep(false);
+  } else {
+    cls = 'r-err'; icon = ICON.x; big = r.code === 'NOT_FOUND' ? 'Card not recognized' : 'Punch not saved';
+    sub = esc(r.message || 'Please try again or see your manager.'); beep(false);
+  }
+  COUNT = Math.max(2, Number(CFG && CFG.resultSeconds) || 5);
+  $('panel').innerHTML = `<div class="res ${cls}">
+    <div class="ic">${icon}</div>${lead ? `<div class="lead">${lead}</div>` : ''}<div class="big">${big}</div>
+    ${pills ? `<div class="pills">${pills}</div>` : ''}${sub ? `<div style="font-size:17px;max-width:400px">${sub}</div>` : ''}
+    <div class="count">Back to scan mode in <b id="cnt">${COUNT}</b>s</div>
+    <input id="idInp" style="position:absolute;opacity:0;width:1px;height:1px" aria-hidden="true" tabindex="-1">
+  </div>`;
+  $('idInp').addEventListener('keydown', onKey);   // the next scan cuts the countdown short
+  focusInput();
+  $('footInfo').textContent = r.ok ? 'Last punch: ' + r.name + ' ' + r.type + ' ' + r.time : 'Ready';
+  TIMER = setInterval(() => { COUNT--; const c = $('cnt'); if (c) c.textContent = COUNT; if (COUNT <= 0) idle(); }, 1000);
+}
+
+// ── Keyboard input: USB scanners type very fast and press Enter ──
+function onKey(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const v = e.target.value.trim();
+    e.target.value = '';
+    if (!v) return;
+    const fast = FIRST_KEY_TS && (Date.now() - FIRST_KEY_TS) < Math.max(250, v.length * 60);
+    FIRST_KEY_TS = 0;
+    QUEUE.push({ id: v, method: fast ? 'SCAN' : 'TYPED' });
+    pump();
+    return;
+  }
+  if (e.key.length === 1 && !e.target.value) FIRST_KEY_TS = Date.now();
+}
+function pump() {
+  if (BUSY || !QUEUE.length) return;
+  BUSY = true;
+  const job = QUEUE.shift();
+  processing();
+  api('punch', { key: KEY, id: job.id, method: job.method })
+    .then(r => { BUSY = false; setOnline(true); showResult(r); pump(); })
+    .catch(() => { BUSY = false; setOnline(false); showResult({ ok: false, code: 'NETWORK', message: 'No connection — the punch was NOT saved. Please try again.' }); pump(); });
+}
+function setOnline(on) { $('dot').classList.toggle('off', !on); $('online').textContent = on ? 'Online' : 'Offline — check Wi-Fi'; }
+
+// ── Camera scanning (html5-qrcode; uses the fast built-in BarcodeDetector when the browser has it) ──
+function loadScanner() {
+  return new Promise((res, rej) => {
+    if (window.Html5Qrcode) return res();
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+    s.onload = res; s.onerror = () => rej(new Error('Could not download the camera scanner. Check the internet connection.'));
+    document.head.appendChild(s);
+  });
+}
+async function startCamera() {
+  $('camMsg').hidden = true;
+  try {
+    await loadScanner();
+    const F = Html5QrcodeSupportedFormats;
+    if (!QR) QR = new Html5Qrcode('cam', { formatsToSupport: [F.CODE_128, F.CODE_39, F.CODE_93, F.QR_CODE], experimentalFeatures: { useBarCodeDetectorIfSupported: true }, verbose: false });
+    const cams = await Html5Qrcode.getCameras();
+    if (!cams || !cams.length) throw new Error('No camera was found on this device.');
+    let id = store.get('tc_camid');
+    if (!cams.find(c => c.id === id)) id = (cams.find(c => /front|user|face/i.test(c.label)) || cams[0]).id;
+    $('camSel').innerHTML = cams.map(c => `<option value="${esc(c.id)}" ${c.id === id ? 'selected' : ''}>${esc(c.label || 'Camera')}</option>`).join('');
+    $('camSel').hidden = cams.length < 2;
+    const label = (cams.find(c => c.id === id) || {}).label || '';
+    $('camWrap').classList.toggle('mirror', /front|user|face/i.test(label));
+    $('camWrap').hidden = false; $('tips').hidden = true;
+    await QR.start(id, { fps: 12, qrbox: (w, h) => ({ width: Math.floor(w * 0.85), height: Math.floor(h * 0.5) }), aspectRatio: 1.333 }, onCode, () => {});
+    CAM_ON = true; store.set('tc_cam', '1'); store.set('tc_camid', id);
+    $('camBtn').textContent = 'Camera: on'; $('camBtn').classList.add('on'); $('camBtn').setAttribute('aria-pressed', 'true');
+    if (!$('panel').querySelector('.res,.proc')) idle();
+  } catch (e) {
+    CAM_ON = false; $('camWrap').hidden = true; $('tips').hidden = false;
+    const blocked = /NotAllowed|Permission|not allowed/i.test(String(e && (e.name || e.message || e)));
+    $('camMsg').innerHTML = blocked && IN_GAS
+      ? 'Google blocks the camera on this page. Use the <b>camera kiosk link</b> (GitHub Pages) from the Install Guide, or plug in a USB barcode scanner.'
+      : blocked ? 'Camera permission was refused. Allow the camera for this site in the browser settings, then press Camera again.'
+      : esc(e && e.message ? e.message : 'The camera could not start.');
+    $('camMsg').hidden = false;
+    $('camBtn').textContent = 'Camera: off'; $('camBtn').classList.remove('on');
+  }
+}
+async function stopCamera() {
+  try { if (QR && CAM_ON) await QR.stop(); } catch (e) {}
+  CAM_ON = false; store.set('tc_cam', '0');
+  $('camWrap').hidden = true; $('tips').hidden = false; $('camSel').hidden = true;
+  $('camBtn').textContent = 'Camera: off'; $('camBtn').classList.remove('on'); $('camBtn').setAttribute('aria-pressed', 'false');
+  if (!$('panel').querySelector('.res')) idle();
+}
+function onCode(text) {
+  const t = String(text || '').trim(), now = Date.now();
+  if (!t || (t === LAST_CODE && now - LAST_CODE_TS < 8000)) return;   // card still in front of the camera
+  LAST_CODE = t; LAST_CODE_TS = now;
+  QUEUE.push({ id: t, method: 'CAMERA' });
+  pump();
+}
+$('camBtn').onclick = () => CAM_ON ? stopCamera() : startCamera();
+$('camSel').onchange = async e => { store.set('tc_camid', e.target.value); if (CAM_ON) { try { await QR.stop(); } catch (er) {} CAM_ON = false; } startCamera(); };
+
+// ── Station setup ──
+function connect(key, fromSetup) {
+  api('init', { key }).then(r => {
+    if (!r || !r.ok) {
+      store.del('tc_station');
+      $('setup').hidden = false; $('kiosk').hidden = true;
+      $('keyMsg').textContent = fromSetup ? 'That key was not found or the station is turned off.' : 'This station was turned off or removed. Enter a new key.';
+      return;
+    }
+    KEY = key; CFG = r; store.set('tc_station', key);
+    $('setup').hidden = true; $('kiosk').hidden = false;
+    $('org').textContent = (r.org || 'The Big Carrot') + ' · Time Clock';
+    $('stName').textContent = r.name + ' · ' + r.location + (IN_GAS ? '' : ' · camera kiosk');
+    setOnline(true); idle();
+    if (store.get('tc_cam') === '1' || (!IN_GAS && store.get('tc_cam') !== '0')) startCamera();
+  }).catch(e => { $('setup').hidden = false; $('kiosk').hidden = true; $('keyMsg').textContent = e.message && /API_URL/.test(e.message) ? e.message : 'Could not reach the server. Check the internet connection.'; });
+}
+$('keyBtn').onclick = () => { const k = $('keyInp').value.trim().toUpperCase(); if (k) connect(k, true); };
+$('keyInp').onkeydown = e => { if (e.key === 'Enter') $('keyBtn').click(); };
+$('resetBtn').onclick = () => { if (confirm('Disconnect this kiosk and enter a different station key?')) { store.del('tc_station'); location.reload(); } };
+$('fsBtn').onclick = () => { const el = document.documentElement; (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el); focusInput(); };
+document.addEventListener('click', e => { if (!$('kiosk').hidden && !e.target.closest('select,button')) setTimeout(focusInput, 50); });
+setInterval(() => { if (!$('kiosk').hidden) focusInput(); }, 1500);
+setInterval(() => { if (KEY) api('init', { key: KEY }).then(r => setOnline(!!(r && r.ok))).catch(() => setOnline(false)); }, 300000);
+setInterval(tick, 1000); tick();
+(function init() {
+  if (!IN_GAS && !API_URL) { $('setup').hidden = false; $('setupHelp').innerHTML = '<b>Not configured.</b> Open this file and paste the Kiosk API link into <code>API_URL</code> at the top.'; return; }
+  const k = store.get('tc_station');
+  if (k) connect(k, false); else { $('setup').hidden = false; $('keyInp').focus(); }
+})();
+</script>
+</body>
+</html>
