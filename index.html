@@ -33,12 +33,14 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
 .body{flex:1;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);min-height:0}
 .left{padding:22px 22px 16px 28px;display:flex;flex-direction:column;gap:12px;border-right:1px solid var(--line);min-height:0}
 .viewer{position:relative;flex:1;min-height:300px;border-radius:20px;background:radial-gradient(ellipse at 50% 40%,#2a2235 0%,var(--deep) 70%);overflow:hidden;display:flex;align-items:center;justify-content:center}
-#cam{position:absolute;inset:0}
-#cam video{width:100%!important;height:100%!important;object-fit:cover}
-#cam #qr-shaded-region{display:none!important}
+/* the camera library sets its own inline sizes on #cam and the video — these !important rules win */
+.camhost{position:absolute;inset:0;overflow:hidden;z-index:1}
+#cam{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;padding:0!important;border:0!important}
+#cam video{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;object-fit:cover!important;display:block}
+#cam canvas,#cam img,#cam #qr-shaded-region{display:none!important}
 .mirror #cam video{transform:scaleX(-1)}
 /* business-card guide (3.5" × 2" = 1.75 : 1) */
-.frame{position:relative;width:88%;aspect-ratio:1.75/1;border-radius:18px;border:2px dashed rgba(240,168,119,.55);pointer-events:none;z-index:2}
+.frame{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(88%,calc((100vh - 300px) * 1.75));aspect-ratio:1.75/1;border-radius:18px;box-shadow:0 0 0 9999px rgba(18,10,29,.45);border:2px dashed rgba(240,168,119,.55);pointer-events:none;z-index:2}
 .frame i{position:absolute;width:46px;height:46px;border:6px solid var(--accent)}
 .frame i:nth-child(1){left:-4px;top:-4px;border-right:0;border-bottom:0;border-top-left-radius:18px}
 .frame i:nth-child(2){right:-4px;top:-4px;border-left:0;border-bottom:0;border-top-right-radius:18px}
@@ -122,7 +124,7 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
   <div class="body">
     <div class="left">
       <div class="viewer" id="viewer">
-        <div id="cam"></div>
+        <div class="camhost"><div id="cam"></div></div>
         <div class="vlabel" id="vlabel" hidden>● Camera</div>
         <div class="scanart" id="scanArt">
           <svg width="220" height="100" viewBox="0 0 190 90" aria-hidden="true"><g fill="#e6dff0"><rect x="0" width="6" height="90"/><rect x="12" width="3" height="90"/><rect x="20" width="9" height="90"/><rect x="34" width="3" height="90"/><rect x="42" width="6" height="90"/><rect x="54" width="3" height="90"/><rect x="62" width="12" height="90"/><rect x="80" width="3" height="90"/><rect x="88" width="6" height="90"/><rect x="100" width="9" height="90"/><rect x="114" width="3" height="90"/><rect x="122" width="6" height="90"/><rect x="134" width="3" height="90"/><rect x="142" width="12" height="90"/><rect x="160" width="3" height="90"/><rect x="168" width="6" height="90"/><rect x="180" width="10" height="90"/></g></svg>
@@ -168,6 +170,7 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
 
 <script>
 const IN_GAS = !!(window.google && google.script && google.script.run);
+const TZ = 'America/Toronto';   // kiosk clock always shows store time, even if the tablet's zone is wrong
 let KEY = null, CFG = null, QUEUE = [], BUSY = false, TIMER = null, COUNT = 0;
 let QR = null, CAM_ON = false, LAST_CODE = '', LAST_CODE_TS = 0;
 let BUF = '', BUF_FIRST = 0, BUF_LAST = 0, PAD = '';
@@ -203,10 +206,11 @@ function beep(ok) {
   } catch (e) {}
 }
 function tick() {
-  const t = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).split(' ');
+  const t = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ }).split(' ');
   $('clock').innerHTML = esc(t[0]) + ' <span>' + esc(t[1] || '') + '</span>';
 }
-function greet() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+function hourTO() { return Number(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: TZ })) % 24; }
+function greet() { const h = hourTO(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
 
 // ── Right panel ──
 function idle() {
@@ -237,7 +241,7 @@ function showResult(r) {
     beep(true);
   } else if (r.ok) {
     cls = 'r-out'; icon = ICON.out; lead = 'Successfully punched OUT';
-    big = 'Have a great ' + (new Date().getHours() >= 17 ? 'evening' : 'day') + ', ' + esc(r.first);
+    big = 'Have a great ' + (hourTO() >= 17 ? 'evening' : 'day') + ', ' + esc(r.first);
     pills = `<span class="pill">Out at ${esc(r.time)}</span>${r.todayHours != null ? `<span class="pill">Today ${Number(r.todayHours).toFixed(2)} hrs</span>` : ''}${r.weekHours != null ? `<span class="pill">This week ${Number(r.weekHours).toFixed(2)} hrs</span>` : ''}`;
     beep(true);
   } else if (r.code === 'REPEAT') {
@@ -334,7 +338,7 @@ async function startCamera() {
     $('viewer').classList.toggle('mirror', /front|user|face/i.test(label));
     $('vlabel').textContent = '● Camera' + (/front|user|face/i.test(label) ? ' · front' : '');
     // scan the whole card-shaped area (88% wide, 1.75 : 1)
-    await QR.start(id, { fps: 12, qrbox: (w, h) => { const bw = Math.floor(Math.min(w * 0.88, h * 0.86 * 1.75)); return { width: bw, height: Math.floor(bw / 1.75) }; } }, onCode, () => {});
+    await QR.start(id, { fps: 12 }, onCode, () => {});   // reads the whole picture; the orange frame is the guide
     store.set('tc_cam', '1'); store.set('tc_camid', id);
     camUI(true);
   } catch (e) {
@@ -370,7 +374,7 @@ function connect(key, fromSetup) {
     KEY = key; CFG = r; store.set('tc_station', key);
     $('setup').hidden = true; $('kiosk').hidden = false;
     $('org').textContent = (r.org || 'The Big Carrot') + ' · Time Clock';
-    $('stName').textContent = r.name + ' · ' + r.location + ' · ' + new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
+    $('stName').textContent = r.name + ' · ' + r.location + ' · ' + new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', timeZone: TZ });
     if (document.activeElement) document.activeElement.blur();   // make sure no keyboard is showing
     setOnline(true); camUI(false);
     if (store.get('tc_cam') === '1' || (!IN_GAS && store.get('tc_cam') !== '0')) startCamera();
