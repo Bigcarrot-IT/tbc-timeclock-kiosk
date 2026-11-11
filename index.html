@@ -29,6 +29,12 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
 .logo{width:42px;height:42px;border-radius:12px;background:var(--accent);display:flex;align-items:center;justify-content:center;flex:0 0 auto}
 .clock{font-size:40px;font-weight:800;letter-spacing:-.02em;line-height:1}.clock span{font-size:18px;color:var(--muted)}
 .status{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted)}
+.restbox{position:absolute;inset:0;z-index:3;border-radius:inherit;background:#1b1129;border:2px dashed rgba(240,168,119,.55);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;cursor:pointer;text-align:center;padding:16px}
+.restbox[hidden]{display:none}
+.rb-big{font-size:34px;font-weight:800}
+.rb-or{display:flex;align-items:center;gap:14px;width:min(440px,80%);color:var(--muted);font-size:15px;font-weight:700}.rb-or span{flex:1;height:1px;background:#45345e}
+.rb-scan{display:flex;align-items:center;gap:14px;font-size:24px;font-weight:700;color:#e6dff0}
+.restin{position:absolute;right:16px;top:14px;z-index:4;background:rgba(43,29,63,.85);border-radius:999px;padding:6px 14px;font-size:14px;font-weight:700;color:#e6dff0}
 .clockwarn{background:#8a1f16;color:#fff;font-size:13px;font-weight:700;padding:6px 10px;border-radius:999px;max-width:340px}
 .dotk{width:10px;height:10px;border-radius:50%;background:#4ADE80}.dotk.off{background:#F87171}
 .body{flex:1;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);min-height:0}
@@ -132,6 +138,13 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
           <svg width="220" height="100" viewBox="0 0 190 90" aria-hidden="true"><g fill="#e6dff0"><rect x="0" width="6" height="90"/><rect x="12" width="3" height="90"/><rect x="20" width="9" height="90"/><rect x="34" width="3" height="90"/><rect x="42" width="6" height="90"/><rect x="54" width="3" height="90"/><rect x="62" width="12" height="90"/><rect x="80" width="3" height="90"/><rect x="88" width="6" height="90"/><rect x="100" width="9" height="90"/><rect x="114" width="3" height="90"/><rect x="122" width="6" height="90"/><rect x="134" width="3" height="90"/><rect x="142" width="12" height="90"/><rect x="160" width="3" height="90"/><rect x="168" width="6" height="90"/><rect x="180" width="10" height="90"/></g></svg>
           <div style="font-size:24px;font-weight:800">Scan your card under the scanner</div>
         </div>
+        <div class="restbox" id="restBox" hidden role="button" tabindex="-1" aria-label="Tap here to scan with the camera">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#f0a877" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          <div class="rb-big">Tap here to scan</div>
+          <div class="rb-or"><span></span>OR<span></span></div>
+          <div class="rb-scan"><svg width="96" height="40" viewBox="0 0 190 80" aria-hidden="true"><g fill="#e6dff0"><rect x="0" width="6" height="80"/><rect x="12" width="3" height="80"/><rect x="20" width="9" height="80"/><rect x="34" width="3" height="80"/><rect x="42" width="6" height="80"/><rect x="54" width="3" height="80"/><rect x="62" width="12" height="80"/><rect x="80" width="3" height="80"/><rect x="88" width="6" height="80"/><rect x="100" width="9" height="80"/><rect x="114" width="3" height="80"/><rect x="122" width="6" height="80"/><rect x="134" width="3" height="80"/><rect x="142" width="12" height="80"/><rect x="160" width="3" height="80"/><rect x="168" width="6" height="80"/><rect x="180" width="10" height="80"/></g></svg>Scan your card with the scanner</div>
+        </div>
+        <div class="restin" id="restIn" hidden></div>
         <div class="frame" id="frame" hidden><i></i><i></i><i></i><i></i><div class="laser"></div></div>
       </div>
       <div class="hint" id="hint">Hold the barcode under the scanner</div>
@@ -237,7 +250,7 @@ function idle() {
   clearInterval(TIMER); TIMER = null;
   $('panel').innerHTML = `<div class="idle">
     <h1>Clock in or out</h1>
-    ${CAM_ON ? '<div class="step"><span>1</span>Show your card to the camera</div>' : '<div class="step"><span>1</span>Scan your card under the scanner</div>'}
+    ${CAM_ON ? '<div class="step"><span>1</span>Show your card to the camera</div>' : CAM_REST ? '<div class="step"><span>1</span>Tap the box to scan, or use the scanner</div>' : '<div class="step"><span>1</span>Scan your card under the scanner</div>'}
     <div class="step"><span>2</span>Forgot your card? Type your ID below</div>
     <button class="bigbtn" id="padOpen">Type my Employee ID</button>
     <div class="ready">Ready — no need to touch the screen</div>
@@ -307,6 +320,7 @@ document.addEventListener('keydown', e => {
 });
 function pump() {
   if (BUSY || !QUEUE.length) return;
+  touchCam();
   BUSY = true;
   const job = QUEUE.shift();
   processing();
@@ -488,13 +502,36 @@ function loadScanner() {
 }
 function camUI(on) {
   CAM_ON = on;
-  $('scanArt').hidden = on; $('frame').hidden = !on; $('vlabel').hidden = !on;
-  $('hint').textContent = on ? 'Hold your ID card inside the orange frame' : 'Hold the barcode under the scanner';
-  $('camDot').classList.toggle('off', !on); $('camChip').textContent = on ? 'Camera on' : 'Camera off';
-  $('camBtn').textContent = on ? 'Camera: on' : 'Camera: off'; $('camBtn').classList.toggle('on', on); $('camBtn').setAttribute('aria-pressed', String(on));
+  const rest = !on && CAM_REST;
+  $('scanArt').hidden = on || rest; $('frame').hidden = !on; $('vlabel').hidden = !on;
+  $('restBox').hidden = !rest; if (!on) $('restIn').hidden = true;
+  $('hint').textContent = on ? 'Hold your ID card inside the orange frame' : rest ? 'Camera is resting to save the battery — the scanner is always ready' : 'Hold the barcode under the scanner';
+  $('camDot').classList.toggle('off', !on); $('camChip').textContent = on ? 'Camera on' : rest ? 'Camera resting' : 'Camera off';
+  const secs = restSec();
+  $('camBtn').textContent = on ? 'Camera: on' + (secs ? ' · rests after ' + (secs >= 60 && secs % 60 === 0 ? secs / 60 + ' min' : secs + ' s') : '') : rest ? 'Camera: resting' : 'Camera: off';
+  $('camBtn').classList.toggle('on', on || rest); $('camBtn').setAttribute('aria-pressed', String(on || rest));
   if (!on) $('camSel').hidden = true;
   if (!$('panel').querySelector('.res,.proc')) idle();
 }
+// ── Camera rest: turns the camera off after CAMERA_REST_SEC with no scans; tap the box to wake it ──
+var CAM_REST = false, LAST_ACT = Date.now();
+function restSec() { const n = Number(CFG && CFG.camRestSec); return isFinite(n) && n > 0 ? Math.max(15, n) : (CFG && CFG.camRestSec === 0 ? 0 : 60); }
+function touchCam() { LAST_ACT = Date.now(); }
+async function restCamera() {
+  try { if (QR && CAM_ON) await QR.stop(); } catch (e) {}
+  CAM_REST = true; camUI(false);
+}
+setInterval(() => {
+  const secs = restSec();
+  if (!CAM_ON || !secs) { $('restIn').hidden = true; return; }
+  const left = Math.ceil((LAST_ACT + secs * 1000 - Date.now()) / 1000);
+  if (BUSY || !$('padWrap').hidden || !$('savedWrap').hidden || $('panel').querySelector('.res,.proc')) { touchCam(); return; }
+  if (left <= 0) { restCamera(); return; }
+  $('restIn').hidden = left > 30;
+  $('restIn').textContent = 'Resting in 0:' + String(left).padStart(2, '0');
+}, 1000);
+$('restBox').onclick = e => { e.stopPropagation(); touchCam(); CAM_REST = false; startCamera(); };
+
 async function startCamera() {
   $('camMsg').hidden = true;
   try {
@@ -513,7 +550,7 @@ async function startCamera() {
     // scan the whole card-shaped area (88% wide, 1.75 : 1)
     await QR.start(id, { fps: 12 }, onCode, () => {});   // reads the whole picture; the orange frame is the guide
     store.set('tc_cam', '1'); store.set('tc_camid', id);
-    camUI(true);
+    CAM_REST = false; touchCam(); camUI(true);
   } catch (e) {
     camUI(false);
     const blocked = /NotAllowed|Permission|not allowed/i.test(String(e && (e.name || e.message || e)));
@@ -524,15 +561,15 @@ async function startCamera() {
     $('camMsg').hidden = false;
   }
 }
-async function stopCamera() { try { if (QR && CAM_ON) await QR.stop(); } catch (e) {} store.set('tc_cam', '0'); camUI(false); }
+async function stopCamera() { try { if (QR && CAM_ON) await QR.stop(); } catch (e) {} store.set('tc_cam', '0'); CAM_REST = false; camUI(false); }
 function onCode(text) {
   const t = String(text || '').trim(), now = Date.now();
   if (!t || !$('padWrap').hidden || (t === LAST_CODE && now - LAST_CODE_TS < 8000)) return;   // same card still in front of the camera
-  LAST_CODE = t; LAST_CODE_TS = now;
+  LAST_CODE = t; LAST_CODE_TS = now; touchCam();
   QUEUE.push({ id: t, method: 'CAMERA', at: now, img: feat('photo') ? snap() : '' });
   pump();
 }
-$('camBtn').onclick = () => CAM_ON ? stopCamera() : startCamera();
+$('camBtn').onclick = () => (CAM_ON || CAM_REST) ? stopCamera() : startCamera();
 $('camSel').onchange = async e => { store.set('tc_camid', e.target.value); try { if (QR && CAM_ON) await QR.stop(); } catch (er) {} CAM_ON = false; startCamera(); };
 
 // ── Station setup ──
