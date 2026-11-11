@@ -224,8 +224,10 @@ function api(action, data) {
     else r.kioskPunch(data.key, data.id, data.method, data.at || null, data.off || 0);
   });
   if (!API_URL) return Promise.reject(new Error('API_URL is empty — paste the Kiosk API link at the top of this file.'));
-  return fetch(API_URL, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action }, data)) })
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  const ctl = window.AbortController ? new AbortController() : null, t = setTimeout(() => ctl && ctl.abort(), action === 'init' ? 8000 : 15000);
+  return fetch(API_URL, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action }, data)), signal: ctl ? ctl.signal : undefined })
+    .then(r => { clearTimeout(t); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .catch(e => { clearTimeout(t); throw e; });
 }
 
 let AC = null;
@@ -573,42 +575,57 @@ $('camBtn').onclick = () => (CAM_ON || CAM_REST) ? stopCamera() : startCamera();
 $('camSel').onchange = async e => { store.set('tc_camid', e.target.value); try { if (QR && CAM_ON) await QR.stop(); } catch (er) {} CAM_ON = false; startCamera(); };
 
 // ── Station setup ──
+let SHOWN = false;
+/** Puts the kiosk on screen with these station details (from Time Hub, or the copy saved on this tablet). */
+function showKiosk(key, cfg) {
+  KEY = key; CFG = cfg;
+  $('setup').hidden = true; $('kiosk').hidden = false;
+  $('org').textContent = (cfg.org || 'The Big Carrot') + ' · Time Clock';
+  $('stName').textContent = cfg.name + ' · ' + cfg.location + ' · ' + new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', timeZone: TZ });
+  if (SHOWN) { camUI(CAM_ON); return; }
+  SHOWN = true;
+  if (document.activeElement) document.activeElement.blur();   // make sure no keyboard is showing
+  camUI(false);
+  if (store.get('tc_cam') === '1' || (!IN_GAS && store.get('tc_cam') !== '0')) startCamera();
+}
 function connect(key, fromSetup) {
+  let cached = null; try { cached = JSON.parse(store.get('tc_cfg') || 'null'); } catch (er) {}
+  // Refresh / restart: never wait for the internet — the kiosk is on screen straight away.
+  if (!fromSetup && cached && cached.name && store.get('tc_station') === key) { showKiosk(key, cached); setOnline(navigator.onLine !== false && ONLINE); }
   const sent = Date.now();
   api('init', { key, clientTime: sent }).then(r => {
-    checkClock(r, sent);
-    if (!r || !r.ok) {
-      store.del('tc_station');
+    if (!r || !r.ok) {   // the station was turned off or removed in Settings
+      store.del('tc_station'); store.del('tc_cfg'); SHOWN = false;
       $('setup').hidden = false; $('kiosk').hidden = true;
       $('keyMsg').textContent = fromSetup ? 'That key was not found or the station is turned off.' : 'This station was turned off or removed. Enter a new key.';
       return;
     }
-    KEY = key; CFG = r; store.set('tc_station', key); store.set('tc_cfg', JSON.stringify(r)); setTimeout(flush, 1000);
-    $('setup').hidden = true; $('kiosk').hidden = false;
-    $('org').textContent = (r.org || 'The Big Carrot') + ' · Time Clock';
-    $('stName').textContent = r.name + ' · ' + r.location + ' · ' + new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', timeZone: TZ });
-    if (document.activeElement) document.activeElement.blur();   // make sure no keyboard is showing
-    setOnline(true); camUI(false);
-    if (store.get('tc_cam') === '1' || (!IN_GAS && store.get('tc_cam') !== '0')) startCamera();
+    checkClock(r, sent);
+    store.set('tc_station', key); store.set('tc_cfg', JSON.stringify(r));
+    showKiosk(key, r); setOnline(true); setTimeout(flush, 1000);
   }).catch(e => {
-    let cached = null; try { cached = JSON.parse(store.get('tc_cfg') || 'null'); } catch (er) {}
-    if (!fromSetup && cached && cached.features && cached.features.offline && store.get('tc_station') === key) {   // start in offline mode
-      KEY = key; CFG = cached;
-      $('setup').hidden = true; $('kiosk').hidden = false;
-      $('org').textContent = (cached.org || 'The Big Carrot') + ' · Time Clock';
-      $('stName').textContent = cached.name + ' · ' + cached.location;
-      setOnline(false); camUI(false);
-      if (store.get('tc_cam') === '1' || (!IN_GAS && store.get('tc_cam') !== '0')) startCamera();
-      return;
-    }
-    $('setup').hidden = false; $('kiosk').hidden = true; $('keyMsg').textContent = e.message && /API_URL/.test(e.message) ? e.message : 'Could not reach the server. Check the internet connection.';
+    setOnline(false);
+    if (SHOWN) return;   // already running from the saved copy
+    $('setup').hidden = false; $('kiosk').hidden = true;
+    $('keyMsg').textContent = e.message && /API_URL/.test(e.message) ? e.message : 'Could not reach the server. Check the internet connection, then try again.';
   });
 }
 $('keyBtn').onclick = () => { const k = $('keyInp').value.trim().toUpperCase(); if (k) connect(k, true); };
 $('keyInp').onkeydown = e => { if (e.key === 'Enter') $('keyBtn').click(); };
 $('resetBtn').onclick = () => { if (confirm('Disconnect this kiosk and enter a different station key?')) { store.del('tc_station'); location.reload(); } };
 $('fsBtn').onclick = () => { const el = document.documentElement; (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el); };
-setInterval(() => { if (!KEY) return; const sent = Date.now(); api('init', { key: KEY, clientTime: sent }).then(r => { if (r && r.ok) { CFG = r; store.set('tc_cfg', JSON.stringify(r)); checkClock(r, sent); } setOnline(!!(r && r.ok)); }).catch(() => setOnline(false)); }, 300000);
+function heartbeat() {
+  if (!KEY) return;
+  if (navigator.onLine === false) { setOnline(false); return; }
+  const sent = Date.now();
+  api('init', { key: KEY, clientTime: sent }).then(r => {
+    if (r && r.ok) { CFG = r; store.set('tc_cfg', JSON.stringify(r)); checkClock(r, sent); setOnline(true); if (WAITING) flush(); }
+    else setOnline(false);
+  }).catch(() => setOnline(false));
+}
+setInterval(heartbeat, 30000);
+window.addEventListener('offline', () => setOnline(false));
+window.addEventListener('online', () => setTimeout(heartbeat, 1500));
 setInterval(tick, 1000); tick();
 // Keep keyboard focus on this page (not on a text box) so scanners and card readers are always heard,
 // without ever opening the on-screen keyboard.
