@@ -2,7 +2,7 @@
  * Keeps this page, the camera scanner and the fonts on the tablet, so the kiosk opens with
  * no internet — even after a restart. Punches themselves are kept by the page (IndexedDB).
  * Change V when you upload a new index.html, so tablets pick up the new copy. */
-const V = 'tbc-kiosk-v3.5.1';
+const V = 'tbc-kiosk-v3.6.1';
 const CORE = ['./', './index.html', './html5-qrcode.min.js'];
 
 self.addEventListener('install', e => {
