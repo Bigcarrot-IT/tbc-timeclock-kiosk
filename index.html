@@ -29,6 +29,7 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
 .logo{width:42px;height:42px;border-radius:12px;background:var(--accent);display:flex;align-items:center;justify-content:center;flex:0 0 auto}
 .clock{font-size:40px;font-weight:800;letter-spacing:-.02em;line-height:1}.clock span{font-size:18px;color:var(--muted)}
 .status{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted)}
+.clockwarn{background:#8a1f16;color:#fff;font-size:13px;font-weight:700;padding:6px 10px;border-radius:999px;max-width:340px}
 .dotk{width:10px;height:10px;border-radius:50%;background:#4ADE80}.dotk.off{background:#F87171}
 .body{flex:1;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);min-height:0}
 .left{padding:22px 22px 16px 28px;display:flex;flex-direction:column;gap:12px;border-right:1px solid var(--line);min-height:0}
@@ -119,6 +120,7 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
     <div style="display:flex;align-items:center;gap:22px">
       <div class="clock" id="clock"></div>
       <div class="status"><span class="dotk" id="dot"></span><span id="online">Online</span></div>
+      <div class="clockwarn" id="clockWarn" hidden></div>
     </div>
   </div>
   <div class="body">
@@ -146,9 +148,25 @@ html,body{margin:0;height:100%;background:var(--side);color:var(--ink);font-fami
     <span style="display:flex;gap:8px;flex-wrap:wrap">
       <button id="camBtn" aria-pressed="false">Camera: off</button>
       <select id="camSel" aria-label="Choose camera" hidden></select>
+      <button id="savedBtn">Saved punches</button>
       <button id="fsBtn">Full screen</button>
       <button id="resetBtn">Change station</button>
     </span>
+  </div>
+</div>
+
+<div class="pad-wrap" id="savedWrap" hidden role="dialog" aria-modal="true" aria-label="Punches saved on this tablet">
+  <div class="pad" style="max-width:560px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:22px;font-weight:800">Punches saved on this tablet</div>
+      <button class="key" style="min-height:44px;font-size:15px;padding:0 16px" id="savedClose">Close</button>
+    </div>
+    <div id="savedBody" style="font-size:16px;line-height:1.5"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="key" style="min-height:52px;font-size:16px;padding:0 18px;flex:1" id="savedSend">Send waiting punches now</button>
+      <button class="key" style="min-height:52px;font-size:16px;padding:0 18px;flex:1;background:#C0531A;color:#fff" id="savedCsv">Download backup file (CSV)</button>
+    </div>
+    <div style="font-size:13px;opacity:.75">The backup file lists every punch this tablet saved in the last 45 days. If a tablet breaks during an internet outage, upload this file in Time Hub ▸ Settings ▸ Features ▸ Import saved punches. Punches already in Time Hub are skipped.</div>
   </div>
 </div>
 
@@ -188,7 +206,9 @@ const ICON = {
 function api(action, data) {
   if (IN_GAS) return new Promise((res, rej) => {
     const r = google.script.run.withSuccessHandler(res).withFailureHandler(rej);
-    action === 'init' ? r.kioskInit(data.key) : r.kioskPunch(data.key, data.id, data.method);
+    if (action === 'init') r.kioskInit(data.key, Date.now());
+    else if (action === 'photo') r.kioskPhoto(data.key, data.punchId, data.empId, data.img);
+    else r.kioskPunch(data.key, data.id, data.method, data.at || null, data.off || 0);
   });
   if (!API_URL) return Promise.reject(new Error('API_URL is empty — paste the Kiosk API link at the top of this file.'));
   return fetch(API_URL, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action }, data)) })
@@ -220,7 +240,8 @@ function idle() {
     ${CAM_ON ? '<div class="step"><span>1</span>Show your card to the camera</div>' : '<div class="step"><span>1</span>Scan your card under the scanner</div>'}
     <div class="step"><span>2</span>Forgot your card? Type your ID below</div>
     <button class="bigbtn" id="padOpen">Type my Employee ID</button>
-    <div class="ready">Ready — no need to touch the screen</div></div>`;
+    <div class="ready">Ready — no need to touch the screen</div>
+    ${CAM_ON && feat('photo') ? '<div class="ready" style="margin-top:6px;opacity:.75">📷 A photo is saved with each punch for your time record.</div>' : ''}</div>`;
   $('padOpen').onclick = openPad;
   $('footInfo').textContent = 'Ready';
 }
@@ -244,6 +265,12 @@ function showResult(r) {
     big = 'Have a great ' + (hourTO() >= 17 ? 'evening' : 'day') + ', ' + esc(r.first);
     pills = `<span class="pill">Out at ${esc(r.time)}</span>${r.todayHours != null ? `<span class="pill">Today ${Number(r.todayHours).toFixed(2)} hrs</span>` : ''}${r.weekHours != null ? `<span class="pill">This week ${Number(r.weekHours).toFixed(2)} hrs</span>` : ''}`;
     beep(true);
+  } else if (r.offline) {
+    cls = 'r-warn'; icon = ICON.ok; lead = 'Punch saved on this tablet';
+    big = 'Thanks — ID ' + esc(r.id);
+    pills = `<span class="pill">Scanned at ${esc(r.time)}</span>`;
+    sub = r.queued ? 'Saved. It is sent in a few seconds, right after the earlier saved punches — no need to scan again.' : 'The internet is down right now. Your punch will be sent automatically when it is back — no need to scan again.';
+    beep(true);
   } else if (r.code === 'REPEAT') {
     cls = 'r-warn'; icon = ICON.bang; lead = 'No new punch'; big = r.first ? esc(r.first) + ', you\'re all set' : 'Already punched';
     sub = esc(r.message); beep(false);
@@ -255,19 +282,19 @@ function showResult(r) {
   $('panel').innerHTML = `<div class="res ${cls}"><div class="ic">${icon}</div>${lead ? `<div class="lead">${lead}</div>` : ''}<div class="big">${big}</div>
     ${pills ? `<div class="pills">${pills}</div>` : ''}${sub ? `<div style="font-size:16px;max-width:420px">${sub}</div>` : ''}
     <div class="count">Ready for the next person in <b id="cnt">${COUNT}</b>s</div></div>`;
-  $('footInfo').textContent = r.ok ? 'Last punch: ' + r.name + ' ' + r.type + ' ' + r.time : 'Ready';
+  $('footInfo').textContent = r.offline ? 'Saved offline: ' + r.id + ' ' + r.time : r.ok ? 'Last punch: ' + r.name + ' ' + r.type + ' ' + r.time : 'Ready';
   TIMER = setInterval(() => { COUNT--; const c = $('cnt'); if (c) c.textContent = COUNT; if (COUNT <= 0) idle(); }, 1000);
 }
 
 // ── Scanner / card-reader input WITHOUT a text box, so the tablet keyboard never opens ──
 document.addEventListener('keydown', e => {
-  if ($('kiosk').hidden || !$('padWrap').hidden || e.target.closest('input,select,textarea')) return;
+  if ($('kiosk').hidden || !$('padWrap').hidden || !$('savedWrap').hidden || e.target.closest('input,select,textarea')) return;
   const now = Date.now();
   if (e.key === 'Enter') {
     if (BUF) {
       e.preventDefault();
       const fast = BUF.length > 2 && (BUF_LAST - BUF_FIRST) < Math.max(250, BUF.length * 60);
-      QUEUE.push({ id: BUF, method: fast ? 'SCAN' : 'TYPED' });
+      QUEUE.push({ id: BUF, method: fast ? 'SCAN' : 'TYPED', at: Date.now() });
       BUF = ''; pump();
     }
     return;
@@ -283,11 +310,154 @@ function pump() {
   BUSY = true;
   const job = QUEUE.shift();
   processing();
+  const done = r => { BUSY = false; showResult(r); pump(); };
+  // Feature 1 · offline: while older punches are still waiting, keep the order — this one waits behind them.
+  if (feat('offline') && WAITING > 0) { saveOffline(job, done).then(flush); return; }
   api('punch', { key: KEY, id: job.id, method: job.method })
-    .then(r => { BUSY = false; setOnline(true); showResult(r); pump(); })
-    .catch(() => { BUSY = false; setOnline(false); showResult({ ok: false, code: 'NETWORK', message: 'No connection — the punch was NOT saved. Please try again.' }); pump(); });
+    .then(r => {
+      setOnline(true); done(r);
+      if (r && r.ok) Book.add({ id: job.id, method: job.method, at: job.at || Date.now(), off: clockOff(), station: CFG ? CFG.name : '', status: 'sent', type: r.type, sentAt: Date.now() }).catch(() => {});
+      if (r && r.ok && r.photo && job.img) api('photo', { key: KEY, punchId: r.punchId, empId: r.empId, img: job.img }).catch(() => {});
+    })
+    .catch(() => {
+      setOnline(false);
+      if (feat('offline')) saveOffline(job, done);
+      else done({ ok: false, code: 'NETWORK', message: 'No connection — the punch was NOT saved. Please try again.' });
+    });
 }
-function setOnline(on) { $('dot').classList.toggle('off', !on); $('online').textContent = on ? 'Online' : 'Offline — check Wi-Fi'; }
+let ONLINE = true, WAITING = 0, PROBLEMS = 0;
+function setOnline(on) {
+  ONLINE = on;
+  $('dot').classList.toggle('off', !on);
+  $('online').textContent = (on ? 'Online' : 'Offline — check Wi-Fi') + (WAITING ? ' · ' + WAITING + ' punch' + (WAITING > 1 ? 'es' : '') + ' waiting to send' : '');
+}
+function feat(k) { return !!(CFG && CFG.features && CFG.features[k]); }
+
+// ── Feature 1 · The tablet's "notebook" ──────────────────────────────────────
+// Every punch is written to the browser's database on this tablet (IndexedDB, marked permanent so the
+// browser does not clean it up). There is no time limit: waiting punches stay until Time Hub confirms them.
+// Sent punches are kept 45 days as a backup copy, which can be downloaded as a CSV file.
+const Book = (() => {
+  let dbp = null;
+  const ok = (() => { try { return !!window.indexedDB; } catch (e) { return false; } })();
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('tbc_kiosk', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('punches', { keyPath: 'k', autoIncrement: true });
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const tx = (mode, fn) => open().then(db => new Promise((res, rej) => {
+    const t = db.transaction('punches', mode), st = t.objectStore('punches'); let out;
+    fn(st, v => { out = v; });
+    t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+  }));
+  // fallback: browser storage (only if this browser has no database)
+  const lsAll = () => { try { return JSON.parse(store.get('tc_book') || '[]'); } catch (e) { return []; } };
+  const lsSave = a => store.set('tc_book', JSON.stringify(a));
+  return {
+    add: rec => ok ? tx('readwrite', (st, set) => { const q = st.add(rec); q.onsuccess = () => set(q.result); })
+      : Promise.resolve((() => { const a = lsAll(); rec.k = Date.now() + Math.random(); a.push(rec); lsSave(a); return rec.k; })()),
+    put: rec => ok ? tx('readwrite', st => { st.put(rec); }) : Promise.resolve((() => { const a = lsAll(), i = a.findIndex(x => x.k === rec.k); if (i > -1) a[i] = rec; lsSave(a); })()),
+    del: k => ok ? tx('readwrite', st => { st.delete(k); }) : Promise.resolve(lsSave(lsAll().filter(x => x.k !== k))),
+    all: () => ok ? tx('readonly', (st, set) => { const q = st.getAll(); q.onsuccess = () => set(q.result || []); }) : Promise.resolve(lsAll())
+  };
+})();
+function refreshCounts() {
+  return Book.all().then(a => { WAITING = a.filter(x => x.status === 'waiting').length; PROBLEMS = a.filter(x => x.status === 'problem').length; setOnline(ONLINE); return a; }).catch(() => []);
+}
+/** Tablet clock vs Time Hub clock (ms to ADD to the tablet time), measured whenever the kiosk is online. */
+function clockOff() {
+  try { const c = JSON.parse(store.get('tc_off') || 'null'); return c && Date.now() - c.at < 7 * 864e5 ? c.ms : 0; } catch (e) { return 0; }
+}
+function saveOffline(job, done) {
+  const at = job.at || Date.now(), rep = ((CFG && CFG.repeatMin) || 2) * 60000;
+  const tStr = new Date(at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ });
+  return Book.all().then(a => {
+    if (a.some(x => x.status !== 'problem' && x.id.toUpperCase() === job.id.toUpperCase() && Math.abs(x.at - at) < rep)) {
+      done({ ok: false, code: 'REPEAT', message: 'Your punch at ' + tStr + ' is already saved on this tablet.' }); return;
+    }
+    return Book.add({ id: job.id, method: job.method, at, off: clockOff(), station: CFG ? CFG.name : '', status: 'waiting' })
+      .then(() => refreshCounts()).then(() => done({ ok: false, offline: true, queued: ONLINE, id: job.id, time: tStr }));
+  }).catch(() => done({ ok: false, code: 'NETWORK', message: 'No connection and this tablet could not save the punch. Please write it on the paper sheet.' }));
+}
+let FLUSHING = false;
+async function flush() {
+  if (FLUSHING || !KEY) return;
+  FLUSHING = true;
+  try {
+    const list = (await Book.all()).filter(x => x.status === 'waiting').sort((a, b) => a.at - b.at);
+    for (const rec of list) {
+      let r;
+      try { r = await api('punch', { key: KEY, id: rec.id, method: rec.method, at: rec.at, off: rec.off || 0 }); }
+      catch (e) { setOnline(false); break; }
+      setOnline(true);
+      if (!r || r.retry) break;
+      if (r.ok) Object.assign(rec, { status: 'sent', type: r.type || (r.duplicate ? 'already in Time Hub' : ''), msg: r.pending ? 'Sent to Approvals' : '', sentAt: Date.now() });
+      else Object.assign(rec, { status: 'problem', msg: r.message || r.code || 'Not accepted', sentAt: Date.now() });
+      await Book.put(rec);
+    }
+    // keep sent punches 45 days as a backup copy
+    const cut = Date.now() - 45 * 864e5;
+    for (const rec of (await Book.all())) if (rec.status === 'sent' && rec.at < cut) await Book.del(rec.k);
+  } catch (e) {} finally { FLUSHING = false; refreshCounts(); }
+}
+window.addEventListener('online', () => setTimeout(flush, 1500));
+setInterval(flush, 20000);
+(function startBook() {
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+  let old = []; try { old = JSON.parse(store.get('tc_pending') || '[]'); } catch (e) {}   // v3.2 punches → database
+  Promise.all(old.map(x => Book.add({ id: x.id, method: x.method, at: x.at, off: 0, station: '', status: 'waiting' })))
+    .then(() => { if (old.length) store.del('tc_pending'); }).catch(() => {}).then(refreshCounts);
+  try { const c = JSON.parse(store.get('tc_off') || 'null'); if (c && Math.abs(c.ms) >= 120000) { $('clockWarn').hidden = false; $('clockWarn').textContent = 'Tablet clock was ' + Math.round(Math.abs(c.ms) / 60000) + ' min ' + (c.ms < 0 ? 'fast' : 'slow') + ' — turn on Automatic date & time'; } } catch (e) {}
+})();
+
+// ── Saved punches window + backup CSV ──
+function openSaved() {
+  Book.all().then(a => {
+    const w = a.filter(x => x.status === 'waiting'), p = a.filter(x => x.status === 'problem'), s = a.filter(x => x.status === 'sent');
+    const t = x => new Date(x.at).toLocaleString('en-CA', { timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    $('savedBody').innerHTML = `<div><b>${w.length}</b> waiting to send · <b>${p.length}</b> need a manager · <b>${s.length}</b> sent (last 45 days)</div>
+      ${p.length ? `<div style="background:#fbe7e4;color:#8a1f16;border-radius:10px;padding:8px 10px;margin-top:8px">${p.slice(-5).map(x => esc(x.id + ' · ' + t(x) + ' — ' + x.msg)).join('<br>')}</div>` : ''}
+      ${w.length ? `<div style="opacity:.8;margin-top:8px">Oldest waiting: ${esc(t(w.sort((a, b) => a.at - b.at)[0]))}</div>` : ''}`;
+    $('savedWrap').hidden = false; clearInterval(TIMER); TIMER = null;
+  });
+}
+function downloadCsv() {
+  Book.all().then(a => {
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const rows = [['Station', 'Emp_ID', 'Scanned_At_UTC', 'Scanned_Local', 'Method', 'Clock_Offset_Sec', 'Status', 'Message']].concat(
+      a.sort((x, y) => x.at - y.at).map(x => [x.station || (CFG && CFG.name) || '', x.id, new Date(x.at).toISOString(),
+        new Date(x.at).toLocaleString('en-CA', { timeZone: TZ, hour12: false }), x.method, Math.round((x.off || 0) / 1000), x.status, x.msg || '']));
+    const blob = new Blob([rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' });
+    const l = document.createElement('a'); l.href = URL.createObjectURL(blob);
+    l.download = 'kiosk_punches_' + ((CFG && CFG.name) || 'station').replace(/[^\w]+/g, '_') + '_' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(l); l.click(); l.remove();
+  });
+}
+$('savedBtn').onclick = openSaved;
+$('savedClose').onclick = () => { $('savedWrap').hidden = true; if (!BUSY) idle(); document.body.focus({ preventScroll: true }); };
+$('savedSend').onclick = () => { $('savedBody').insertAdjacentHTML('beforeend', '<div style="margin-top:6px">Sending…</div>'); flush().then(openSaved); };
+$('savedCsv').onclick = downloadCsv;
+
+// ── Clock check: warn when this tablet's clock is more than 2 minutes off ──
+function checkClock(r, sentAt) {
+  if (!r || !r.serverTime) return;
+  const mid = (sentAt + Date.now()) / 2, off = r.serverTime - mid;   // add `off` to tablet time to get Time Hub time
+  store.set('tc_off', JSON.stringify({ ms: Math.round(off), at: Date.now() }));
+  const m = Math.round(Math.abs(off) / 60000);
+  $('clockWarn').hidden = Math.abs(off) < 120000;
+  $('clockWarn').textContent = 'Tablet clock is ' + m + ' min ' + (off < 0 ? 'fast' : 'slow') + ' — turn on Automatic date & time';
+}
+
+// ── Feature 7 · Photo: a small picture from the camera at the moment of the scan ──
+function snap() {
+  try {
+    const v = document.querySelector('#cam video');
+    if (!v || !v.videoWidth) return '';
+    const w = 320, h = Math.round(v.videoHeight * w / v.videoWidth), c = document.createElement('canvas');
+    c.width = w; c.height = h; c.getContext('2d').drawImage(v, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch (e) { return ''; }
+}
 
 // ── On-screen ID pad ──
 '1234567890QWERTYUIOPASDFGHJKLZXCVBNM-'.split('').forEach(ch => {
@@ -301,15 +471,18 @@ function closePad() { $('padWrap').hidden = true; if (!BUSY) idle(); }
 $('padClose').onclick = closePad;
 $('padClear').onclick = () => { PAD = ''; showPad(); };
 $('padBack').onclick = () => { PAD = PAD.slice(0, -1); showPad(); };
-$('padGo').onclick = () => { if (!PAD) return; const v = PAD; $('padWrap').hidden = true; QUEUE.push({ id: v, method: 'TYPED' }); pump(); };
+$('padGo').onclick = () => { if (!PAD) return; const v = PAD; $('padWrap').hidden = true; QUEUE.push({ id: v, method: 'TYPED', at: Date.now() }); pump(); };
 
 // ── Camera (html5-qrcode; uses the built-in BarcodeDetector when the browser has one) ──
 function loadScanner() {
   return new Promise((res, rej) => {
     if (window.Html5Qrcode) return res();
     const s = document.createElement('script');
-    s.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
-    s.onload = res; s.onerror = () => rej(new Error('Could not download the camera scanner. Check the internet connection.'));
+    const web = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+    s.src = IN_GAS ? web : 'html5-qrcode.min.js';   // camera kiosk keeps its own copy so the camera starts with no internet
+    s.onload = res;
+    s.onerror = () => { if (s.src === web || IN_GAS) return rej(new Error('Could not download the camera scanner. Check the internet connection.'));
+      const t = document.createElement('script'); t.src = web; t.onload = res; t.onerror = () => rej(new Error('Could not load the camera scanner.')); document.head.appendChild(t); };
     document.head.appendChild(s);
   });
 }
@@ -356,7 +529,7 @@ function onCode(text) {
   const t = String(text || '').trim(), now = Date.now();
   if (!t || !$('padWrap').hidden || (t === LAST_CODE && now - LAST_CODE_TS < 8000)) return;   // same card still in front of the camera
   LAST_CODE = t; LAST_CODE_TS = now;
-  QUEUE.push({ id: t, method: 'CAMERA' });
+  QUEUE.push({ id: t, method: 'CAMERA', at: now, img: feat('photo') ? snap() : '' });
   pump();
 }
 $('camBtn').onclick = () => CAM_ON ? stopCamera() : startCamera();
@@ -364,33 +537,49 @@ $('camSel').onchange = async e => { store.set('tc_camid', e.target.value); try {
 
 // ── Station setup ──
 function connect(key, fromSetup) {
-  api('init', { key }).then(r => {
+  const sent = Date.now();
+  api('init', { key, clientTime: sent }).then(r => {
+    checkClock(r, sent);
     if (!r || !r.ok) {
       store.del('tc_station');
       $('setup').hidden = false; $('kiosk').hidden = true;
       $('keyMsg').textContent = fromSetup ? 'That key was not found or the station is turned off.' : 'This station was turned off or removed. Enter a new key.';
       return;
     }
-    KEY = key; CFG = r; store.set('tc_station', key);
+    KEY = key; CFG = r; store.set('tc_station', key); store.set('tc_cfg', JSON.stringify(r)); setTimeout(flush, 1000);
     $('setup').hidden = true; $('kiosk').hidden = false;
     $('org').textContent = (r.org || 'The Big Carrot') + ' · Time Clock';
     $('stName').textContent = r.name + ' · ' + r.location + ' · ' + new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', timeZone: TZ });
     if (document.activeElement) document.activeElement.blur();   // make sure no keyboard is showing
     setOnline(true); camUI(false);
     if (store.get('tc_cam') === '1' || (!IN_GAS && store.get('tc_cam') !== '0')) startCamera();
-  }).catch(e => { $('setup').hidden = false; $('kiosk').hidden = true; $('keyMsg').textContent = e.message && /API_URL/.test(e.message) ? e.message : 'Could not reach the server. Check the internet connection.'; });
+  }).catch(e => {
+    let cached = null; try { cached = JSON.parse(store.get('tc_cfg') || 'null'); } catch (er) {}
+    if (!fromSetup && cached && cached.features && cached.features.offline && store.get('tc_station') === key) {   // start in offline mode
+      KEY = key; CFG = cached;
+      $('setup').hidden = true; $('kiosk').hidden = false;
+      $('org').textContent = (cached.org || 'The Big Carrot') + ' · Time Clock';
+      $('stName').textContent = cached.name + ' · ' + cached.location;
+      setOnline(false); camUI(false);
+      if (store.get('tc_cam') === '1' || (!IN_GAS && store.get('tc_cam') !== '0')) startCamera();
+      return;
+    }
+    $('setup').hidden = false; $('kiosk').hidden = true; $('keyMsg').textContent = e.message && /API_URL/.test(e.message) ? e.message : 'Could not reach the server. Check the internet connection.';
+  });
 }
 $('keyBtn').onclick = () => { const k = $('keyInp').value.trim().toUpperCase(); if (k) connect(k, true); };
 $('keyInp').onkeydown = e => { if (e.key === 'Enter') $('keyBtn').click(); };
 $('resetBtn').onclick = () => { if (confirm('Disconnect this kiosk and enter a different station key?')) { store.del('tc_station'); location.reload(); } };
 $('fsBtn').onclick = () => { const el = document.documentElement; (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el); };
-setInterval(() => { if (KEY) api('init', { key: KEY }).then(r => setOnline(!!(r && r.ok))).catch(() => setOnline(false)); }, 300000);
+setInterval(() => { if (!KEY) return; const sent = Date.now(); api('init', { key: KEY, clientTime: sent }).then(r => { if (r && r.ok) { CFG = r; store.set('tc_cfg', JSON.stringify(r)); checkClock(r, sent); } setOnline(!!(r && r.ok)); }).catch(() => setOnline(false)); }, 300000);
 setInterval(tick, 1000); tick();
 // Keep keyboard focus on this page (not on a text box) so scanners and card readers are always heard,
 // without ever opening the on-screen keyboard.
 document.body.tabIndex = -1;
 setInterval(() => { if (!$('kiosk').hidden && $('padWrap').hidden && !document.hasFocus()) { window.focus(); document.body.focus({ preventScroll: true }); } }, 2000);
 document.addEventListener('click', () => { if (!$('kiosk').hidden && $('padWrap').hidden) document.body.focus({ preventScroll: true }); });
+// ── Camera kiosk (GitHub Pages): keep a copy of this page so it opens with no internet, even after a restart ──
+if (!IN_GAS && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
 (function init() {
   if (!IN_GAS && !API_URL) { $('setup').hidden = false; $('setupHelp').innerHTML = '<b>Not configured.</b> Open this file and paste the Kiosk API link into <code>API_URL</code> at the top.'; return; }
   const k = store.get('tc_station');
