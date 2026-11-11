@@ -219,7 +219,7 @@ const ICON = {
 function api(action, data) {
   if (IN_GAS) return new Promise((res, rej) => {
     const r = google.script.run.withSuccessHandler(res).withFailureHandler(rej);
-    if (action === 'init') r.kioskInit(data.key, Date.now());
+    if (action === 'init') r.kioskInit(data.key, Date.now(), data.rv || '');
     else if (action === 'photo') r.kioskPhoto(data.key, data.punchId, data.empId, data.img);
     else r.kioskPunch(data.key, data.id, data.method, data.at || null, data.off || 0);
   });
@@ -271,13 +271,13 @@ function showResult(r) {
     const warn = r.tagKind === 'warn';
     cls = warn ? 'r-warn' : 'r-in'; icon = ICON.ok;
     lead = warn ? 'Punched IN — not on today\'s schedule' : 'Successfully punched IN';
-    big = greet() + ', ' + esc(r.first);
+    big = greet() + (r.first ? ', ' + esc(r.first) : '');
     pills = `<span class="pill">In at ${esc(r.time)}</span>${r.shiftText ? `<span class="pill">Shift ${esc(r.shiftText)}</span>` : ''}${r.tag && !warn ? `<span class="pill ${r.tagKind === 'late' ? 'tag-late' : 'tag-ok'}">${esc(r.tag)}</span>` : ''}`;
     if (warn) sub = 'Your punch is saved. Your manager will confirm this shift.';
     beep(true);
   } else if (r.ok) {
     cls = 'r-out'; icon = ICON.out; lead = 'Successfully punched OUT';
-    big = 'Have a great ' + (hourTO() >= 17 ? 'evening' : 'day') + ', ' + esc(r.first);
+    big = 'Have a great ' + (hourTO() >= 17 ? 'evening' : 'day') + (r.first ? ', ' + esc(r.first) : '');
     pills = `<span class="pill">Out at ${esc(r.time)}</span>${r.todayHours != null ? `<span class="pill">Today ${Number(r.todayHours).toFixed(2)} hrs</span>` : ''}${r.weekHours != null ? `<span class="pill">This week ${Number(r.weekHours).toFixed(2)} hrs</span>` : ''}`;
     beep(true);
   } else if (r.offline) {
@@ -297,7 +297,7 @@ function showResult(r) {
   $('panel').innerHTML = `<div class="res ${cls}"><div class="ic">${icon}</div>${lead ? `<div class="lead">${lead}</div>` : ''}<div class="big">${big}</div>
     ${pills ? `<div class="pills">${pills}</div>` : ''}${sub ? `<div style="font-size:16px;max-width:420px">${sub}</div>` : ''}
     <div class="count">Ready for the next person in <b id="cnt">${COUNT}</b>s</div></div>`;
-  $('footInfo').textContent = r.offline ? 'Saved offline: ' + r.id + ' ' + r.time : r.ok ? 'Last punch: ' + r.name + ' ' + r.type + ' ' + r.time : 'Ready';
+  $('footInfo').textContent = r.ok ? 'Last punch: ' + r.name + ' ' + r.type + ' ' + r.time + (r.savedLocally ? ' · saved on tablet' : '') : 'Ready';
   TIMER = setInterval(() => { COUNT--; const c = $('cnt'); if (c) c.textContent = COUNT; if (COUNT <= 0) idle(); }, 1000);
 }
 
@@ -327,11 +327,12 @@ function pump() {
   const job = QUEUE.shift();
   processing();
   const done = r => { BUSY = false; showResult(r); pump(); };
-  // Feature 1 · offline: while older punches are still waiting, keep the order — this one waits behind them.
-  if (feat('offline') && WAITING > 0) { saveOffline(job, done).then(flush); return; }
+  // Feature 1 · offline: only if THIS person still has an unsent punch does the new one wait behind it (keeps IN/OUT right).
+  if (feat('offline') && WAIT_IDS[rosterId(job.id)]) { saveOffline(job, done).then(flush); return; }
   api('punch', { key: KEY, id: job.id, method: job.method })
     .then(r => {
       setOnline(true); done(r);
+      if (r && r.first) rememberName(job.id, r.first);
       if (r && r.ok) Book.add({ id: job.id, method: job.method, at: job.at || Date.now(), off: clockOff(), station: CFG ? CFG.name : '', status: 'sent', type: r.type, sentAt: Date.now() }).catch(() => {});
       if (r && r.ok && r.photo && job.img) api('photo', { key: KEY, punchId: r.punchId, empId: r.empId, img: job.img }).catch(() => {});
     })
@@ -341,7 +342,7 @@ function pump() {
       else done({ ok: false, code: 'NETWORK', message: 'No connection — the punch was NOT saved. Please try again.' });
     });
 }
-let ONLINE = true, WAITING = 0, PROBLEMS = 0;
+let ONLINE = true, WAITING = 0, PROBLEMS = 0, WAIT_IDS = {};
 function setOnline(on) {
   ONLINE = on;
   $('dot').classList.toggle('off', !on);
@@ -378,21 +379,48 @@ const Book = (() => {
   };
 })();
 function refreshCounts() {
-  return Book.all().then(a => { WAITING = a.filter(x => x.status === 'waiting').length; PROBLEMS = a.filter(x => x.status === 'problem').length; setOnline(ONLINE); return a; }).catch(() => []);
+  return Book.all().then(a => {
+    const w = a.filter(x => x.status === 'waiting');
+    WAITING = w.length; PROBLEMS = a.filter(x => x.status === 'problem').length;
+    WAIT_IDS = {}; w.forEach(x => WAIT_IDS[rosterId(x.id)] = 1);
+    setOnline(ONLINE); return a;
+  }).catch(() => []);
 }
 /** Tablet clock vs Time Hub clock (ms to ADD to the tablet time), measured whenever the kiosk is online. */
 function clockOff() {
   try { const c = JSON.parse(store.get('tc_off') || 'null'); return c && Date.now() - c.at < 7 * 864e5 ? c.ms : 0; } catch (e) { return 0; }
 }
+// ── Staff list kept on the tablet (Emp ID → first name; extra card # → Emp ID) ──
+function roster() { try { return JSON.parse(store.get('tc_roster') || 'null'); } catch (e) { return null; } }
+function rosterId(raw) {
+  const id = String(raw || '').trim().toUpperCase(), r = roster();
+  if (!r) return id;
+  const hit = r.find(x => x[0] === id || (x[2] && String(x[2]).toUpperCase() === id));
+  return hit ? hit[0] : id;
+}
+function rememberName(raw, first) {
+  try { const m = JSON.parse(store.get('tc_names') || '{}'); m[rosterId(raw)] = first; store.set('tc_names', JSON.stringify(m)); } catch (e) {}
+}
+function firstName(id) {
+  const r = roster(), hit = r && r.find(x => x[0] === id);
+  if (hit && hit[1]) return hit[1];
+  try { return JSON.parse(store.get('tc_names') || '{}')[id] || ''; } catch (e) { return ''; }
+}
 function saveOffline(job, done) {
-  const at = job.at || Date.now(), rep = ((CFG && CFG.repeatMin) || 2) * 60000;
+  const at = job.at || Date.now(), rep = ((CFG && CFG.repeatMin) || 2) * 60000, maxMs = ((CFG && CFG.maxShiftHours) || 16) * 3600000;
   const tStr = new Date(at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ });
+  const r = roster(), id = rosterId(job.id), first = firstName(id);
+  if (r && !r.find(x => x[0] === id)) { done({ ok: false, code: 'NOT_FOUND', message: 'Card not recognized. No punch was recorded — please see your manager.' }); return Promise.resolve(); }
   return Book.all().then(a => {
-    if (a.some(x => x.status !== 'problem' && x.id.toUpperCase() === job.id.toUpperCase() && Math.abs(x.at - at) < rep)) {
-      done({ ok: false, code: 'REPEAT', message: 'Your punch at ' + tStr + ' is already saved on this tablet.' }); return;
+    const mine = a.filter(x => x.status !== 'problem' && rosterId(x.id) === id).sort((x, y) => x.at - y.at);
+    const last = mine.filter(x => x.at <= at).pop();
+    if (last && Math.abs(at - last.at) < rep) {
+      done({ ok: false, code: 'REPEAT', first, message: 'You already punched ' + (last.type || '') + ' at ' + new Date(last.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ }) + '.' }); return;
     }
-    return Book.add({ id: job.id, method: job.method, at, off: clockOff(), station: CFG ? CFG.name : '', status: 'waiting' })
-      .then(() => refreshCounts()).then(() => done({ ok: false, offline: true, queued: ONLINE, id: job.id, time: tStr }));
+    // best guess of IN / OUT from the punches this tablet knows about (Time Hub decides for sure when it is sent)
+    const type = last && last.type === 'IN' && at - last.at < maxMs ? 'OUT' : 'IN';
+    return Book.add({ id: job.id, method: job.method, at, off: clockOff(), station: CFG ? CFG.name : '', status: 'waiting', type, tries: 0 })
+      .then(() => refreshCounts()).then(() => done({ ok: true, type, first, name: first || id, time: tStr, savedLocally: true }));
   }).catch(() => done({ ok: false, code: 'NETWORK', message: 'No connection and this tablet could not save the punch. Please write it on the paper sheet.' }));
 }
 let FLUSHING = false;
@@ -406,8 +434,14 @@ async function flush() {
       try { r = await api('punch', { key: KEY, id: rec.id, method: rec.method, at: rec.at, off: rec.off || 0 }); }
       catch (e) { setOnline(false); break; }
       setOnline(true);
-      if (!r || r.retry) break;
-      if (r.ok) Object.assign(rec, { status: 'sent', type: r.type || (r.duplicate ? 'already in Time Hub' : ''), msg: r.pending ? 'Sent to Approvals' : '', sentAt: Date.now() });
+      if (!r || (r.retry && r.code === 'BUSY')) break;            // Time Hub busy — try again later, in order
+      if (r.retry) {                                                // Time Hub error — try this one again later, carry on with the rest
+        rec.tries = (rec.tries || 0) + 1;
+        if (rec.tries >= 5) Object.assign(rec, { status: 'problem', msg: 'Time Hub could not save it: ' + (r.message || r.code), sentAt: Date.now() });
+        await Book.put(rec); continue;
+      }
+      if (r.first) rememberName(rec.id, r.first);
+      if (r.ok) Object.assign(rec, { status: 'sent', type: r.type || rec.type || '', msg: r.duplicate ? 'already in Time Hub' : r.pending ? 'Sent to Approvals' : '', sentAt: Date.now() });
       else Object.assign(rec, { status: 'problem', msg: r.message || r.code || 'Not accepted', sentAt: Date.now() });
       await Book.put(rec);
     }
@@ -576,6 +610,11 @@ $('camSel').onchange = async e => { store.set('tc_camid', e.target.value); try {
 
 // ── Station setup ──
 let SHOWN = false;
+function keepRoster(r) {
+  if (r && r.roster) { store.set('tc_roster', JSON.stringify(r.roster)); store.set('tc_rv', r.rosterVer || ''); }
+  if (r) { delete r.roster; }
+  if (r && r.features && !r.features.offline) { store.del('tc_roster'); store.del('tc_rv'); }
+}
 /** Puts the kiosk on screen with these station details (from Time Hub, or the copy saved on this tablet). */
 function showKiosk(key, cfg) {
   KEY = key; CFG = cfg;
@@ -593,14 +632,14 @@ function connect(key, fromSetup) {
   // Refresh / restart: never wait for the internet — the kiosk is on screen straight away.
   if (!fromSetup && cached && cached.name && store.get('tc_station') === key) { showKiosk(key, cached); setOnline(navigator.onLine !== false && ONLINE); }
   const sent = Date.now();
-  api('init', { key, clientTime: sent }).then(r => {
+  api('init', { key, clientTime: sent, rv: store.get('tc_rv') || '' }).then(r => {
     if (!r || !r.ok) {   // the station was turned off or removed in Settings
       store.del('tc_station'); store.del('tc_cfg'); SHOWN = false;
       $('setup').hidden = false; $('kiosk').hidden = true;
       $('keyMsg').textContent = fromSetup ? 'That key was not found or the station is turned off.' : 'This station was turned off or removed. Enter a new key.';
       return;
     }
-    checkClock(r, sent);
+    checkClock(r, sent); keepRoster(r);
     store.set('tc_station', key); store.set('tc_cfg', JSON.stringify(r));
     showKiosk(key, r); setOnline(true); setTimeout(flush, 1000);
   }).catch(e => {
@@ -618,8 +657,8 @@ function heartbeat() {
   if (!KEY) return;
   if (navigator.onLine === false) { setOnline(false); return; }
   const sent = Date.now();
-  api('init', { key: KEY, clientTime: sent }).then(r => {
-    if (r && r.ok) { CFG = r; store.set('tc_cfg', JSON.stringify(r)); checkClock(r, sent); setOnline(true); if (WAITING) flush(); }
+  api('init', { key: KEY, clientTime: sent, rv: store.get('tc_rv') || '' }).then(r => {
+    if (r && r.ok) { keepRoster(r); CFG = r; store.set('tc_cfg', JSON.stringify(r)); checkClock(r, sent); setOnline(true); if (WAITING) flush(); }
     else setOnline(false);
   }).catch(() => setOnline(false));
 }
