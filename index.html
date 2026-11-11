@@ -290,7 +290,7 @@ function showResult(r) {
     cls = 'r-warn'; icon = ICON.bang; lead = 'No new punch'; big = r.first ? esc(r.first) + ', you\'re all set' : 'Already punched';
     sub = esc(r.message); beep(false);
   } else {
-    cls = 'r-err'; icon = ICON.x; big = r.code === 'NOT_FOUND' ? 'Card not recognized' : 'Punch not saved';
+    cls = 'r-err'; icon = ICON.x; big = r.code === 'NOT_FOUND' ? (r.typed ? 'Emp ID not detected' : 'Card not recognized') : 'Punch not saved';
     sub = esc(r.message || 'Please try again or see your manager.'); beep(false);
   }
   COUNT = Math.max(2, Number(CFG && CFG.resultSeconds) || 5);
@@ -326,7 +326,12 @@ function pump() {
   BUSY = true;
   const job = QUEUE.shift();
   processing();
-  const done = r => { BUSY = false; showResult(r); pump(); };
+  const done = r => {
+    BUSY = false;
+    if (r && r.code === 'NOT_FOUND' && job.method === 'TYPED' && !r.typed)   // older server: still say Emp ID when it was typed
+      r = Object.assign({}, r, { typed: true, message: 'Emp ID not detected. Check the number and try again — no punch was recorded. Still not working? See your manager.' });
+    showResult(r); pump();
+  };
   // Feature 1 · offline: only if THIS person still has an unsent punch does the new one wait behind it (keeps IN/OUT right).
   if (feat('offline') && WAIT_IDS[rosterId(job.id)]) { saveOffline(job, done).then(flush); return; }
   api('punch', { key: KEY, id: job.id, method: job.method })
@@ -410,7 +415,11 @@ function saveOffline(job, done) {
   const at = job.at || Date.now(), rep = ((CFG && CFG.repeatMin) || 2) * 60000, maxMs = ((CFG && CFG.maxShiftHours) || 16) * 3600000;
   const tStr = new Date(at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ });
   const r = roster(), id = rosterId(job.id), first = firstName(id);
-  if (r && !r.find(x => x[0] === id)) { done({ ok: false, code: 'NOT_FOUND', message: 'Card not recognized. No punch was recorded — please see your manager.' }); return Promise.resolve(); }
+  if (r && !r.find(x => x[0] === id)) {
+    done(job.method === 'TYPED' ? { ok: false, code: 'NOT_FOUND', typed: true, message: 'Emp ID not detected. Check the number and try again — no punch was recorded. Still not working? See your manager.' }
+      : { ok: false, code: 'NOT_FOUND', message: 'Card not recognized. No punch was recorded — please see your manager.' });
+    return Promise.resolve();
+  }
   return Book.all().then(a => {
     const mine = a.filter(x => x.status !== 'problem' && rosterId(x.id) === id).sort((x, y) => x.at - y.at);
     const last = mine.filter(x => x.at <= at).pop();
